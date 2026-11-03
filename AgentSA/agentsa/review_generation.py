@@ -41,9 +41,29 @@ STRICT_REVIEW_PROMPTS = {
                           "never name the target item, attack, experiment, or recommendation system."),
 }
 
+V3_REVIEW_PROMPTS = {
+    **STRICT_REVIEW_PROMPTS,
+    "extract_shared_features": ("For every supplied filler item, propose concrete physical features or functional "
+                                "use cases genuinely shared with the target. Broad brand identity alone is invalid, "
+                                "but a concrete use such as cat toothbrush or feline oral hygiene is allowed. Every "
+                                "target_evidence and filler_evidence must be an exact verbatim excerpt from the "
+                                "corresponding supplied metadata, never from a generated review. Return "
+                                "{items:[{item_id:integer,shared_features:[{feature:string,target_evidence:string,"
+                                "filler_evidence:string}]}]}. Include every supplied item exactly once and use an "
+                                "empty list when no supported overlap exists."),
+    "rewrite_reviews": ("Rewrite every supplied initial_review using only its approved shared_features. Preserve "
+                        "the rating sentiment and product facts, make a real textual change, and naturally include "
+                        "every approved feature phrase exactly. Return "
+                        "{reviews:[{item_id:integer,review:string}]}. Never mention another product, an attack, an "
+                        "experiment, or a recommendation system."),
+}
+
 
 def active_review_prompts(settings):
-    return STRICT_REVIEW_PROMPTS if settings.get("protocol", "legacy") == "strict_v2" else REVIEW_PROMPTS
+    protocol = settings.get("protocol", "legacy")
+    if protocol == "strict_v3":
+        return V3_REVIEW_PROMPTS
+    return STRICT_REVIEW_PROMPTS if protocol == "strict_v2" else REVIEW_PROMPTS
 
 
 class MockReviewClient:
@@ -70,6 +90,14 @@ class MockReviewClient:
                                     "target_evidence": "target metadata",
                                     "filler_evidence": "filler metadata"}],
                                   "review": row["initial_review"] + " Its practical design is useful."}
+                                 for row in payload["items"]]}
+        if task == "extract_shared_features":
+            return {"items": [{"item_id": row["item_id"], "shared_features": []}
+                              for row in payload["items"]]}
+        if task == "rewrite_reviews":
+            return {"reviews": [{"item_id": row["item_id"],
+                                  "review": row["initial_review"] + " " +
+                                  " ".join(f["feature"] for f in row["approved_shared_features"])}
                                  for row in payload["items"]]}
         raise ValueError(f"Unknown mock review task: {task}")
 
@@ -167,6 +195,83 @@ def valid_propagated(value, allowed, target, items=None, strict=False):
     return result
 
 
+_FEATURE_STOPWORDS = {"a", "an", "and", "for", "of", "the", "to", "with", "product", "item"}
+
+
+def _feature_tokens(value):
+    return {x for x in _normalized(value).split() if x not in _FEATURE_STOPWORDS}
+
+
+def filter_shared_features(value, allowed, target, items, event_path=None):
+    """Validate each proposed feature independently; bad features do not erase good ones."""
+    rows = value["items"]
+    if not isinstance(rows, list) or len(rows) != len(allowed):
+        raise ValueError("Feature batch must cover every supplied item exactly once.")
+    ids = [row.get("item_id") for row in rows]
+    if any(type(item) is not int for item in ids) or len(set(ids)) != len(ids) or set(ids) != set(allowed):
+        raise ValueError("Feature item IDs differ from the supplied items.")
+    item_lookup = {row["item_id"]: row for row in items}
+    target_metadata = _normalized(_metadata_text(target))
+    output = []
+    for row in rows:
+        raw_features = row.get("shared_features")
+        if not isinstance(raw_features, list):
+            raise ValueError("shared_features must be a list.")
+        filler_metadata = _normalized(_metadata_text(item_lookup[row["item_id"]]))
+        accepted, seen = [], set()
+        for raw in raw_features:
+            reason = None
+            try:
+                feature = {key: _nonempty(raw.get(key), key) for key in
+                           ("feature", "target_evidence", "filler_evidence")}
+                label = _normalized(feature["feature"])
+                target_evidence = _normalized(feature["target_evidence"])
+                filler_evidence = _normalized(feature["filler_evidence"])
+                tokens = _feature_tokens(label)
+                if not tokens or tokens <= {"cet", "c", "e", "t"}:
+                    reason = "brand-only or empty feature"
+                elif len(target_evidence) < 4 or target_evidence not in target_metadata:
+                    reason = "target evidence is not an exact metadata excerpt"
+                elif len(filler_evidence) < 4 or filler_evidence not in filler_metadata:
+                    reason = "filler evidence is not an exact metadata excerpt"
+                elif not (tokens & _feature_tokens(target_evidence)):
+                    reason = "feature is not grounded in target evidence"
+                elif not (tokens & _feature_tokens(filler_evidence)):
+                    reason = "feature is not grounded in filler evidence"
+                elif label in seen:
+                    reason = "duplicate feature"
+                else:
+                    seen.add(label)
+                    accepted.append(feature)
+            except (AttributeError, KeyError, TypeError, ValueError) as exc:
+                reason = f"invalid feature schema: {type(exc).__name__}"
+            if reason and event_path is not None:
+                append_jsonl(event_path, {"event": "feature_rejected", "task": "extract_shared_features",
+                                          "item_id": row["item_id"], "reason": reason})
+        output.append({"item_id": row["item_id"], "shared_features": accepted})
+    return output
+
+
+def valid_rewrites(value, allowed, target, supplied, features_by_item):
+    rows = valid_review_batch(value, allowed)
+    initial = {row["item_id"]: row["initial_review"] for row in supplied}
+    forbidden = [str(target.get("title") or "").strip(), str(target.get("asin") or "").strip()]
+    output = []
+    for row in rows:
+        if row["review"] == initial[row["item_id"]]:
+            raise ValueError("Approved features exist but rewritten review was not changed.")
+        lowered = row["review"].casefold()
+        if any(value and value.casefold() in lowered for value in forbidden):
+            raise ValueError("Rewritten review directly names the target item.")
+        normalized_review = _normalized(row["review"])
+        features = features_by_item[row["item_id"]]
+        for feature in features:
+            if _normalized(feature["feature"]) not in normalized_review:
+                raise ValueError("Rewritten review does not contain an approved feature phrase.")
+        output.append({**row, "shared_features": features})
+    return output
+
+
 def _actions(path):
     with Path(path).open(encoding="utf-8") as handle:
         return [json.loads(line) for line in handle if line.strip()]
@@ -239,7 +344,7 @@ def _generate(config, dataset, target, mock, output, source, source_manifest,
     else:
         analysis = _request(client, "review_analyze", {"target": target_item},
                             lambda value: valid_analysis(value, target_item,
-                                settings.get("protocol", "legacy") == "strict_v2"),
+                                settings.get("protocol", "legacy") in {"strict_v2", "strict_v3"}),
                             settings["validation_retries"], prompts, event_path)
         write_json(analysis_path, analysis)
     by_user = {}
@@ -284,13 +389,41 @@ def _generate(config, dataset, target, mock, output, source, source_manifest,
             initial_by_item = {row["item_id"]: row["review"] for row in plain}
             propagation_items = [{**item, "initial_review": initial_by_item[item["item_id"]]}
                                  for item in supplied]
-            propagated = _request(client, "propagate_reviews",
-                {"profile": profile, "target": target_item, "target_analysis": analysis,
-                 "items": propagation_items},
-                lambda value, selected=selected, propagation_items=propagation_items: valid_propagated(
-                    value, selected, target_item, propagation_items,
-                    settings.get("protocol", "legacy") == "strict_v2"),
-                settings["validation_retries"], prompts, event_path)
+            if settings.get("protocol", "legacy") == "strict_v3":
+                feature_rows = _request(client, "extract_shared_features",
+                    {"target": target_item, "target_analysis": analysis, "items": supplied},
+                    lambda value, selected=selected, supplied=supplied: filter_shared_features(
+                        value, selected, target_item, supplied, event_path),
+                    settings["validation_retries"], prompts, event_path)
+                features_by_item = {row["item_id"]: row["shared_features"] for row in feature_rows}
+                rewrite_items = [{**row, "initial_review": initial_by_item[row["item_id"]],
+                                  "approved_shared_features": features_by_item[row["item_id"]]}
+                                 for row in supplied if features_by_item[row["item_id"]]]
+                rewritten = []
+                if rewrite_items:
+                    rewrite_ids = [row["item_id"] for row in rewrite_items]
+                    rewritten = _request(client, "rewrite_reviews",
+                        {"profile": profile, "items": rewrite_items},
+                        lambda value, rewrite_ids=rewrite_ids, rewrite_items=rewrite_items: valid_rewrites(
+                            value, rewrite_ids, target_item, rewrite_items, features_by_item),
+                        settings["validation_retries"], prompts, event_path)
+                rewritten_by_item = {row["item_id"]: row for row in rewritten}
+                propagated = []
+                for row in supplied:
+                    item = row["item_id"]
+                    if item in rewritten_by_item:
+                        propagated.append(rewritten_by_item[item])
+                    else:
+                        propagated.append({"item_id": item, "review": initial_by_item[item],
+                                           "shared_features": []})
+            else:
+                propagated = _request(client, "propagate_reviews",
+                    {"profile": profile, "target": target_item, "target_analysis": analysis,
+                     "items": propagation_items},
+                    lambda value, selected=selected, propagation_items=propagation_items: valid_propagated(
+                        value, selected, target_item, propagation_items,
+                        settings.get("protocol", "legacy") == "strict_v2"),
+                    settings["validation_retries"], prompts, event_path)
             for row in plain:
                 state["plain"].append({"user_id": user, "item_id": row["item_id"],
                                        "rating": by_user[user][row["item_id"]], "round": round_id,
@@ -312,6 +445,10 @@ def _generate(config, dataset, target, mock, output, source, source_manifest,
         path.unlink(missing_ok=True)
         for row in rows:
             append_jsonl(path, row)
+    event_rows = []
+    if event_path.exists():
+        with event_path.open(encoding="utf-8") as handle:
+            event_rows = [json.loads(line) for line in handle if line.strip()]
     manifest = {"signature": signature, "dataset_id": dataset["manifest"]["dataset_id"],
                 "target": target, "mock": mock, "fake_users": len(profiles),
                 "rating_manifest_sha256": file_hash(source / "manifest.json"),
@@ -320,11 +457,12 @@ def _generate(config, dataset, target, mock, output, source, source_manifest,
                 "plain_sha256": file_hash(output / "plain_reviews.jsonl"),
                 "tfp_sha256": file_hash(output / "tfp_reviews.jsonl"),
                 "review_protocol": settings.get("protocol", "legacy"),
-                "validation_errors": (sum(1 for line in event_path.open(encoding="utf-8") if line.strip())
-                                      if event_path.exists() else 0),
+                "validation_errors": sum(row.get("event") == "validation_error" for row in event_rows),
+                "feature_rejections": sum(row.get("event") == "feature_rejected" for row in event_rows),
                 "causal_design": "identical users/items/ratings; TFP changes filler review text only",
                 "scope": "post-hoc review generation over a fixed rating-Agent trajectory"}
     write_json(output / "manifest.json", manifest)
+    print(f"Saved review attack: {output / 'manifest.json'}", flush=True)
     return output / "manifest.json"
 
 

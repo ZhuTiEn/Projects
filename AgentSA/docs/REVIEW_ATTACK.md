@@ -53,3 +53,13 @@ V2 生成完成后运行离线审计：
 ```
 
 只有输出中的 `passed` 与 `propagation_exercised` 均为 `true`，且 `strict_validation_failures` 为空，才进入更大规模真实测试。
+
+## V3 两阶段传播
+
+V2 的逐字证据规则会让模型在多次失败后返回空特征。`configs/review_pilot_3users_v3.yaml` 复用已经通过画像审计的 V2 评分轨迹，只生成新的评论，不重复支付评分阶段的 26 次请求。V3 先独立提取共享特征，程序逐项删除无元数据依据或未被双方证据支撑的特征，再把保留下来的特征交给第二次调用重写评论。单个坏特征不会再使整批有效特征丢失。
+
+```powershell
+.venv\Scripts\python.exe -m agentsa --config configs/review_pilot_3users_v3.yaml estimate-reviews
+.venv\Scripts\python.exe -m agentsa --config configs/review_pilot_3users_v3.yaml generate-reviews --target 1920
+.venv\Scripts\python.exe -m agentsa --config configs/review_pilot_3users_v3.yaml audit-reviews --target 1920
+```

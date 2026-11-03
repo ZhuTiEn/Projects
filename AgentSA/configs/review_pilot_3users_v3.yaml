@@ -1,0 +1,24 @@
+# Two-stage V3 review pilot. Reuses the accepted V2 rating trajectory (no rating API calls).
+extends: review_pilot_3users_v2.yaml
+name: review_target_aware_pilot_3users_v3
+reviews:
+  data_output: data/processed/review_full
+  agent_output: runs/agent_review_pilot_3users_v3_text
+  experiment_output: runs/review_pilot_3users_v3_experiment
+  protocol: strict_v3
+  validation_retries: 5
+  recent_reviews: 3
+  encoder: sentence_transformer
+  encoder_model: sentence-transformers/all-MiniLM-L6-v2
+  encoder_revision: null
+  encoder_local_only: false
+  hash_dimensions: 64
+  training:
+    epochs: 100
+    patience: 10
+    batch_size: 4096
+    learning_rate: 0.0003
+    l2: 0.0001
+    id_dimensions: 32
+    hidden_dimensions: 64
+    late_text_weight: 1.0

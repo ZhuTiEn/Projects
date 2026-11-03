@@ -12,7 +12,8 @@ from agentsa.review_data import load_review_data, prepare_review_data
 from agentsa.review_audit import audit_review_attack
 from agentsa.review_experiment import run_review_experiments
 from agentsa.review_generation import (MockReviewClient, generate_review_attack,
-                                        load_generated_reviews, valid_propagated)
+                                        filter_shared_features, load_generated_reviews,
+                                        valid_propagated, valid_rewrites)
 from agentsa.review_models import ReviewTextEncoder, aggregate_features, build_review_model, means
 from agentsa.utils import load_config, read_json
 from test_core import ROOT, create_data
@@ -123,6 +124,50 @@ class ReviewGenerationTests(unittest.TestCase):
             self.assertTrue(audit["passed"])
             self.assertFalse(audit["propagation_exercised"])
             self.assertEqual(audit["strict_validation_failures"], [])
+
+    def test_v3_filters_bad_features_without_losing_good_features(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            event_path = Path(tmp) / "events.jsonl"
+            target = {"title": "Target brush", "category": "Cats Dental Care",
+                      "description": "Soft bristles assure gentle cleaning."}
+            item = {"item_id": 1, "title": "Filler fingerbrush", "category": "Cats Dental Care",
+                    "description": "Includes a soft fingerbrush for daily care.", "rating": 5}
+            response = {"items": [{"item_id": 1, "shared_features": [
+                {"feature": "soft oral brush", "target_evidence": "Soft bristles",
+                 "filler_evidence": "soft fingerbrush"},
+                {"feature": "easy grip", "target_evidence": "gentle cleaning",
+                 "filler_evidence": "invented handle"}]}]}
+            filtered = filter_shared_features(response, [1], target, [item], event_path)
+            self.assertEqual([x["feature"] for x in filtered[0]["shared_features"]],
+                             ["soft oral brush"])
+            self.assertIn("feature_rejected", event_path.read_text(encoding="utf-8"))
+            rewrite_items = [{**item, "initial_review": "It works well.",
+                              "approved_shared_features": filtered[0]["shared_features"]}]
+            rewritten = {"reviews": [{"item_id": 1,
+                                       "review": "This soft oral brush works well."}]}
+            result = valid_rewrites(rewritten, [1], target, rewrite_items,
+                                    {1: filtered[0]["shared_features"]})
+            self.assertEqual(result[0]["shared_features"][0]["feature"], "soft oral brush")
+
+    def test_strict_v3_mock_pipeline_uses_separate_feature_stage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            create_data(root)
+            config = review_config(root)
+            config["agent"].update(profile_diversity_mode="strict_v1",
+                                   profile_candidate_multiplier=2)
+            config["reviews"]["protocol"] = "strict_v3"
+            prepare(config)
+            dataset = load_dataset(config)
+            target = dataset["targets"][0]
+            generate_agent_attack(config, dataset, target, mock=True)
+            generate_review_attack(config, dataset, target, mock=True)
+            _, manifest = load_generated_reviews(config, dataset, target, "tfp", True)
+            self.assertEqual(manifest["review_protocol"], "strict_v3")
+            self.assertEqual(manifest["feature_rejections"], 0)
+            audit = audit_review_attack(config, dataset, target, mock=True)
+            self.assertEqual(audit["feature_rejections"], 0)
+            self.assertTrue(audit["passed"])
 
     def test_propagation_rejects_target_name_and_wrong_ids(self):
         target = {"title": "Secret Cat Brush", "asin": "A1"}
