@@ -71,6 +71,8 @@ def validate_config(config):
         raise ValueError("semantic_pool_size must be a positive integer.")
     if not 0 <= agent.get("semantic_fraction", 0.5) <= 1:
         raise ValueError("semantic_fraction must be in [0,1].")
+    if agent.get("profile_diversity_mode", "legacy") not in {"legacy", "strict_v1"}:
+        raise ValueError("Unknown profile_diversity_mode.")
     if not 0 < config["experiment"].get("target_success_hr", 0.01) <= 1:
         raise ValueError("target_success_hr must be in (0,1].")
     if "reviews" in config:
@@ -80,6 +82,8 @@ def validate_config(config):
                 raise ValueError(f"reviews.{key} is required.")
         if reviews["encoder"] not in {"hash", "sentence_transformer"}:
             raise ValueError("reviews.encoder must be hash or sentence_transformer.")
+        if reviews.get("protocol", "legacy") not in {"legacy", "strict_v2"}:
+            raise ValueError("Unknown reviews.protocol.")
         if type(reviews["validation_retries"]) is not int or reviews["validation_retries"] < 1:
             raise ValueError("reviews.validation_retries must be positive.")
         if type(reviews["recent_reviews"]) is not int or reviews["recent_reviews"] < 0:

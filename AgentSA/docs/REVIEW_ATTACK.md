@@ -43,3 +43,13 @@
 .venv\Scripts\python.exe -m agentsa --config configs/review_pilot_3users.yaml generate-agent --target 1920
 .venv\Scripts\python.exe -m agentsa --config configs/review_pilot_3users.yaml generate-reviews --target 1920
 ```
+
+完成的 V1 pilot 暴露出画像同质化、共享特征存在但评论未改写、证据未与元数据逐字核验的问题。修正版使用 `configs/review_pilot_3users_v2.yaml` 和全新输出目录，保留 V1 作为对照。V2 对画像实施年龄、职业、兴趣的确定性多样性门槛；传播证据必须是目标与 filler 元数据中的原文片段；有共享特征必须改写并包含特征短语，无共享特征必须原样保留；结构拒绝原因写入 `validation_events.jsonl`。
+
+V2 生成完成后运行离线审计：
+
+```powershell
+.venv\Scripts\python.exe -m agentsa --config configs/review_pilot_3users_v2.yaml audit-reviews --target 1920
+```
+
+只有输出中的 `passed` 为 `true`，且 `strict_validation_failures` 为空，才进入更大规模测试。

@@ -36,6 +36,9 @@ def main(argv=None):
     reviews = commands.add_parser("generate-reviews", help="Generate plain and target-feature-propagated reviews")
     reviews.add_argument("--target", type=int)
     reviews.add_argument("--mock", action="store_true", help="Deterministic fixture; NO real LLM calls")
+    audit = commands.add_parser("audit-reviews", help="Offline quality audit for generated plain/TFP reviews")
+    audit.add_argument("--target", type=int)
+    audit.add_argument("--mock", action="store_true")
     review_run = commands.add_parser("run-reviews", help="Train/evaluate review-aware victim models")
     review_run.add_argument("--models")
     review_run.add_argument("--seeds")
@@ -127,6 +130,12 @@ def main(argv=None):
         from .review_generation import generate_review_attack
         target = args.target if args.target is not None else dataset["targets"][0]
         generate_review_attack(config, dataset, target, args.mock)
+        return
+    if args.command == "audit-reviews":
+        from .review_audit import audit_review_attack
+        target = args.target if args.target is not None else dataset["targets"][0]
+        print(json.dumps(audit_review_attack(config, dataset, target, args.mock),
+                         ensure_ascii=False, indent=2))
         return
     if args.command == "run-reviews":
         from .review_experiment import run_review_experiments

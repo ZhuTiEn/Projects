@@ -21,6 +21,19 @@ PROMPTS = {
     "rate": "Act according to the supplied profile and your own retrieved interaction history. Rate every supplied item exactly once on the integer scale 1 to 5, based on personal preference, not blanket maximum ratings. Return {ratings:[{item_id:integer,rating:integer}]}. Do not add other items.",
 }
 
+STRICT_PROFILE_PROMPT = (
+    "Infer one synthetic person who strongly prefers the target while being meaningfully different from "
+    "the supplied existing_profiles. Vary age band, occupation, interests and rating habits; do not copy a "
+    "previous demographic template. Return {profile:{age:integer, occupation:string, interests:[strings], "
+    "rating_habits:string}}. Candidate ID is for diversity, not a product ID."
+)
+
+
+def active_prompt_identity(settings):
+    if settings.get("profile_diversity_mode", "legacy") == "strict_v1":
+        return {**PROMPTS, "profile_strict_instruction": STRICT_PROFILE_PROMPT}
+    return PROMPTS
+
 
 def public_item(item):
     return {"item_id": item["item_id"], "title": item["title"][:500],
@@ -107,16 +120,16 @@ class TargetAwareExposure(ExposureEnvironment):
         self.weights = ((1-semantic_fraction) * popular + semantic_fraction * semantic)
 
 
-def request_validated(client, task, payload, validator, retries):
+def request_validated(client, task, payload, validator, retries, instruction=None):
     last = None
     for attempt in range(retries):
         try:
-            instruction = PROMPTS[task]
+            prompt = instruction or PROMPTS[task]
             if task == "select" and payload.get("min_count", 0):
-                instruction += (" For this dense-history experimental variant, choose at least min_count "
+                prompt += (" For this dense-history experimental variant, choose at least min_count "
                                 "and at most max_count supplied items. This minimum overrides the option to choose none; "
                                 "prefer items consistent with your profile.")
-            result = client.generate(task, instruction, {**payload, "schema_attempt": attempt})
+            result = client.generate(task, prompt, {**payload, "schema_attempt": attempt})
             return validator(result)
         except (ValueError, KeyError, TypeError) as exc:
             last = exc
@@ -167,8 +180,68 @@ def valid_ratings(result, selected):
     return [{"item_id": row["item_id"], "rating": row["rating"]} for row in rows]
 
 
+def _profile_key(profile):
+    return (int(profile["age"]), profile["occupation"].strip().casefold(),
+            tuple(sorted(x.strip().casefold() for x in profile["interests"])))
+
+
+def _interest_jaccard(left, right):
+    a = {x.strip().casefold() for x in left["interests"] if x.strip()}
+    b = {x.strip().casefold() for x in right["interests"] if x.strip()}
+    return len(a & b) / max(len(a | b), 1)
+
+
+def profile_diversity_report(profiles, existing=()):
+    """Deterministic minimum diversity gate; LLM self-claims are not sufficient."""
+    count = len(profiles)
+    occupations = [p["occupation"].strip().casefold() for p in profiles]
+    ages = [int(p["age"]) for p in profiles]
+    exact = [_profile_key(p) for p in profiles]
+    existing_keys = {_profile_key(p) for p in existing}
+    max_jaccard = max((_interest_jaccard(a, b) for i, a in enumerate(profiles)
+                        for b in profiles[i + 1:]), default=0.0)
+    required_occupations = min(count, max(1, math.ceil(count * 0.5)))
+    reasons = []
+    if len(set(exact)) != count or any(key in existing_keys for key in exact):
+        reasons.append("duplicate profile")
+    if len(set(occupations)) < required_occupations:
+        reasons.append("too few occupations")
+    if count >= 3 and max(ages) - min(ages) < 5:
+        reasons.append("age range below 5 years")
+    if max_jaccard >= 0.95:
+        reasons.append("near-identical interests")
+    return {"passed": not reasons, "reasons": reasons,
+            "unique_occupations": len(set(occupations)),
+            "age_range": max(ages)-min(ages) if ages else 0,
+            "max_interest_jaccard": max_jaccard}
+
+
+def _profile_distance(left, right):
+    age = min(abs(int(left["age"])-int(right["age"])) / 20.0, 1.0)
+    occupation = float(left["occupation"].strip().casefold() != right["occupation"].strip().casefold())
+    return age + occupation + (1.0 - _interest_jaccard(left, right))
+
+
+def greedy_diverse_ids(candidates, count, existing=()):
+    """Deterministic fallback when the LLM's subset is still homogeneous."""
+    remaining = list(candidates)
+    chosen = []
+    while remaining and len(chosen) < count:
+        if not chosen and not existing:
+            selected = remaining[0]
+        else:
+            reference = [x["profile"] for x in chosen] + list(existing)
+            selected = max(remaining, key=lambda row: (
+                min((_profile_distance(row["profile"], other) for other in reference), default=0.0),
+                -row["candidate_id"]))
+        chosen.append(selected)
+        remaining.remove(selected)
+    return [row["candidate_id"] for row in chosen]
+
+
 def make_profiles(client, target, count, settings):
     retries = settings["validation_retries"]
+    strict = settings.get("profile_diversity_mode", "legacy") == "strict_v1"
     def analysis_validator(value):
         for field in ("features", "likely_preferences"):
             if not isinstance(value[field], list) or not all(isinstance(x, str) for x in value[field]):
@@ -184,9 +257,13 @@ def make_profiles(client, target, count, settings):
             candidate_id = group_start * math.ceil(settings["profile_candidate_multiplier"]) + local
             accepted = None
             for regeneration in range(retries):
-                profile = request_validated(client, "profile", {
+                payload = {
                     "target": target, "analysis": analysis, "candidate_id": candidate_id,
-                    "regeneration": regeneration}, valid_profile, retries)
+                    "regeneration": regeneration}
+                if strict:
+                    payload["existing_profiles"] = [x["profile"] for x in candidates[-8:]] + result[-8:]
+                profile = request_validated(client, "profile", payload, valid_profile, retries,
+                                            STRICT_PROFILE_PROMPT if strict else None)
                 def preference_validator(value):
                     if type(value["prefers_target"]) is not bool:
                         raise ValueError("prefers_target must be boolean")
@@ -203,6 +280,11 @@ def make_profiles(client, target, count, settings):
         chosen = request_validated(client, "diversity", {"count": required, "candidates": candidates},
             lambda value: valid_ids(value, "selected_ids", [x["candidate_id"] for x in candidates], exact=required), retries)
         lookup = {x["candidate_id"]: x["profile"] for x in candidates}
+        if strict and not profile_diversity_report([lookup[i] for i in chosen], result)["passed"]:
+            chosen = greedy_diverse_ids(candidates, required, result)
+            report = profile_diversity_report([lookup[i] for i in chosen], result)
+            if not report["passed"]:
+                raise ValueError(f"Strict profile diversity failed: {report['reasons']}")
         result.extend(lookup[i] for i in chosen)
         print(f"Profiles ready: {len(result)}/{count} (validated and diversified)", flush=True)
     return result
@@ -277,14 +359,15 @@ def _generate(config, dataset, target, mock, directory):
     settings = config["agent"]
     count = fake_user_count(dataset["manifest"]["users"], config["attack"])
     client = MockClient() if mock else ChatClient(config["llm"], directory / "llm")
+    prompt_identity = active_prompt_identity(settings)
     signature = digest({"dataset": dataset["manifest"]["dataset_id"], "settings": settings,
                         "fake_count": count, "target": target, "mock": mock,
-                        "client": client.identity, "prompts": PROMPTS})
+                        "client": client.identity, "prompts": prompt_identity})
     identity_path = directory / "identity.json"
     if identity_path.exists() and read_json(identity_path)["signature"] != signature:
         raise ValueError("Agent settings/model changed. Choose a new agent.output directory.")
     write_json(identity_path, {"signature": signature, "client": client.identity,
-                               "settings": settings, "mock": mock, "prompts": PROMPTS})
+                               "settings": settings, "mock": mock, "prompts": prompt_identity})
     encoder = ItemEncoder(dataset["items"], settings, directory, mock)
     profile_path = directory / "profiles.json"
     if profile_path.exists():

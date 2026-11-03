@@ -1,0 +1,32 @@
+# Strict V2 pilot. Keeps the completed V1 pilot untouched for before/after comparison.
+extends: review_pilot_3users.yaml
+name: review_target_aware_pilot_3users_v2
+experiment:
+  output: runs/review_pilot_3users_v2_rating_experiment
+agent:
+  output: runs/agent_review_pilot_3users_v2_rating
+  profile_diversity_mode: strict_v1
+reviews:
+  data_output: data/processed/review_full
+  agent_output: runs/agent_review_pilot_3users_v2_text
+  experiment_output: runs/review_pilot_3users_v2_experiment
+  protocol: strict_v2
+  validation_retries: 5
+  recent_reviews: 3
+  encoder: sentence_transformer
+  encoder_model: sentence-transformers/all-MiniLM-L6-v2
+  encoder_revision: null
+  encoder_local_only: false
+  hash_dimensions: 64
+  training:
+    epochs: 100
+    patience: 10
+    batch_size: 4096
+    learning_rate: 0.0003
+    l2: 0.0001
+    id_dimensions: 32
+    hidden_dimensions: 64
+    late_text_weight: 1.0
+llm:
+  max_requests: 200
+  max_total_tokens: 2000000
