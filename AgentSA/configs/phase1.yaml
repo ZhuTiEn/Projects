@@ -1,0 +1,77 @@
+# Project-specific defaults, NOT recovered author hyperparameters.
+project_root: ..
+name: phase1_full_pet_supplies_2014
+data:
+  reviews: reviews_Pet_Supplies_5.json.gz
+  metadata: meta_Pet_Supplies.json.gz
+  output: data/processed/full
+  year: null                 # User choice: full dataset, not one calendar year.
+  min_interactions: 5
+  max_users: null
+  seed: 2026
+  target_count: 10
+  train_fraction: 0.8
+  validation_fraction: 0.1
+experiment:
+  output: runs/phase1
+  models: [nmf, neunmf]
+  methods: [target_only, random, average, bandwagon, segmented, mixed, aop]
+  seeds: [11, 22, 33]
+  top_k: 10
+  ranking_user_batch: 32
+  prediction_batch: 8192
+  clip_predictions: false
+training:
+  device: cpu
+  threads: 4
+  epochs: 100
+  patience: 10
+  batch_size: 4096
+  learning_rate: 0.001
+  latent_l2: 0.0001
+  nmf_dimensions: 32
+  nmf_initial_jitter: 0.15
+  neunmf_dimensions: 10
+  neunmf_product_dimensions: 60
+  neunmf_hidden: [50, 50, 50]
+  # alternating = feature step then network step; NNMF paper used RMSprop.
+  neunmf_optimizer: rmsprop
+  neunmf_optimization: alternating
+attack:
+  seed: 2026
+  fake_ratio: 0.05
+  filler_count: 10
+  selected_fraction: 0.2
+  aop_fraction: 0.1
+agent:
+  seed: 2026
+  output: runs/agent_data
+  rounds: 5
+  exposure_size: 20
+  popularity_alpha: 1.0
+  max_selected_per_round: 4
+  filler_cap: 20
+  reference_per_round: 2
+  relevant_k: 3
+  recent_m: 3
+  profile_candidate_multiplier: 2
+  validation_retries: 3
+  # Formal generation requires a semantic encoder; no silent lexical fallback.
+  encoder: sentence_transformer
+  encoder_model: sentence-transformers/all-MiniLM-L6-v2
+  encoder_revision: null
+  encoder_local_only: false
+  ablation: full             # full / no_memory / no_profile
+llm:
+  provider: chat_completions # No model fixed; set environment variables later.
+  api_key_env: AGENTSA_API_KEY
+  base_url_env: AGENTSA_BASE_URL
+  model_env: AGENTSA_MODEL
+  allow_no_api_key: false    # Can be true for a trusted local service.
+  temperature: 0.7
+  max_tokens: 1800
+  json_mode: false           # Enable only if supported by the chosen provider.
+  timeout_seconds: 90
+  retries: 3
+  max_requests: 10000        # Total HTTP attempts across resumes of one target.
+  max_total_tokens: 10000000 # Checked before requests; final response can exceed it.

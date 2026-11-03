@@ -1,0 +1,22 @@
+extends: formal_target_aware.yaml
+name: review_target_aware_dense_5pct
+reviews:
+  data_output: data/processed/review_full
+  agent_output: runs/agent_reviews_target_aware_5pct
+  experiment_output: runs/review_target_aware_5pct
+  validation_retries: 3
+  recent_reviews: 6
+  encoder: sentence_transformer
+  encoder_model: sentence-transformers/all-MiniLM-L6-v2
+  encoder_revision: null
+  encoder_local_only: false
+  hash_dimensions: 64
+  training:
+    epochs: 100
+    patience: 10
+    batch_size: 4096
+    learning_rate: 0.0003
+    l2: 0.0001
+    id_dimensions: 32
+    hidden_dimensions: 64
+    late_text_weight: 1.0

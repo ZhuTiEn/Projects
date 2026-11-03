@@ -1,0 +1,22 @@
+extends: smoke.yaml
+name: review_smoke
+reviews:
+  data_output: data/processed/review_smoke
+  agent_output: runs/agent_reviews_smoke
+  experiment_output: runs/review_smoke
+  validation_retries: 2
+  recent_reviews: 3
+  encoder: hash
+  encoder_model: null
+  encoder_revision: null
+  encoder_local_only: true
+  hash_dimensions: 32
+  training:
+    epochs: 4
+    patience: 2
+    batch_size: 64
+    learning_rate: 0.003
+    l2: 0.0001
+    id_dimensions: 8
+    hidden_dimensions: 12
+    late_text_weight: 1.0

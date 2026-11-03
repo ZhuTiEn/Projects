@@ -1,0 +1,7 @@
+# Frozen-target coverage check, CPU only, no Agent generation or API calls.
+extends: scale_check.yaml
+name: offline_scale_check_all_targets_nmf
+experiment:
+  output: runs/attack_revision_20261102/scale_check_all_targets
+  models: [nmf]
+  methods: [average]

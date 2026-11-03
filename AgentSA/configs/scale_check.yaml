@@ -1,0 +1,8 @@
+# Offline 5% injection check; no real or mock Agent included in this run.
+extends: formal_original.yaml
+name: offline_scale_check_5pct
+experiment:
+  output: runs/attack_revision_20261102/scale_check
+  models: [nmf, neunmf]
+  methods: [target_only, average]
+  seeds: [11]

@@ -1,0 +1,18 @@
+﻿extends: deepseek.yaml
+name: deepseek_pilot
+attack:
+  fake_ratio: 0.0002
+agent:
+  output: runs/agent_data_deepseek_pilot
+  rounds: 2
+  max_selected_per_round: 2
+  filler_cap: 4
+experiment:
+  output: runs/phase1_deepseek_pilot
+  seeds: [11]
+training:
+  epochs: 10
+  patience: 3
+llm:
+  max_requests: 100
+  max_total_tokens: 200000

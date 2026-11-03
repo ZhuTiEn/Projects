@@ -1,0 +1,29 @@
+extends: phase1.yaml
+name: smoke_validation_only
+data:
+  output: data/processed/smoke
+  min_interactions: 2
+  max_users: 160
+  target_count: 1
+experiment:
+  output: runs/smoke_checked
+  seeds: [11]
+  methods: [target_only, random, average, bandwagon, segmented, mixed, aop]
+training:
+  epochs: 4
+  patience: 3
+  nmf_dimensions: 8
+  neunmf_dimensions: 4
+  neunmf_product_dimensions: 8
+  neunmf_hidden: [16, 16]
+attack:
+  fake_ratio: 0.05
+  filler_count: 4
+agent:
+  output: runs/smoke_agent_checked
+  rounds: 2
+  exposure_size: 10
+  max_selected_per_round: 2
+  filler_cap: 4
+  encoder: lexical_test
+  profile_candidate_multiplier: 2

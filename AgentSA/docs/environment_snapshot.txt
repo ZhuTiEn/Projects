@@ -1,0 +1,18 @@
+{
+  "python": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "packages": {
+    "agentsa-reproduction": "0.1.0",
+    "torch": "2.5.1+cu118",
+    "numpy": "2.5.3",
+    "PyYAML": "6.0.3",
+    "requests": "2.34.2",
+    "setuptools": "84.0.0",
+    "sentence-transformers": "3.4.1",
+    "transformers": "4.48.3",
+    "tokenizers": "0.21.4",
+    "huggingface-hub": "0.36.2"
+  },
+  "environment_note": "Local venv inherits preinstalled system packages. Exact rebuild may require a platform-specific PyTorch wheel.",
+  "semantic_verified": "2026-10-30: local tiny BERT model through ItemEncoder; pretrained all-MiniLM-L6-v2 not downloaded in this check."
+}

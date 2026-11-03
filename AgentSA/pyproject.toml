@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentsa-reproduction"
+version = "0.1.0"
+description = "Offline rating-stage AgentSA reproduction on Amazon Pet Supplies"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "torch>=2.1", "PyYAML>=6", "requests>=2.31"]
+
+[project.optional-dependencies]
+semantic = ["sentence-transformers==3.4.1", "transformers==4.48.3"]
+
+[project.scripts]
+agentsa = "agentsa.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["agentsa*"]

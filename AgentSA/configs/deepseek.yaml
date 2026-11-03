@@ -1,0 +1,19 @@
+# Official DeepSeek Chat Completions. Verified against official docs 2026-10-30.
+extends: phase1.yaml
+name: phase1_deepseek
+experiment:
+  output: runs/phase1_deepseek
+agent:
+  output: runs/agent_data_deepseek
+llm:
+  provider: deepseek
+  api_key_env: DEEPSEEK_API_KEY
+  base_url_env: DEEPSEEK_BASE_URL
+  model_env: DEEPSEEK_MODEL
+  base_url: https://api.deepseek.com
+  model: deepseek-flash  # Starting choice; override via DEEPSEEK_MODEL or this field.
+  thinking: disabled   # Explicit choice; enable separately to compare reasoning mode.
+  reasoning_effort: null
+  json_mode: true
+  max_tokens: 4096
+  timeout_seconds: 120

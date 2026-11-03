@@ -1,0 +1,18 @@
+# Experimental enhancement, NOT the original AgentSA exposure protocol.
+extends: formal_original.yaml
+name: formal_target_aware_dense_5pct
+attack:
+  filler_count: 20
+experiment:
+  output: runs/formal_target_aware_5pct
+agent:
+  output: runs/agent_formal_target_aware_5pct
+  variant: target_aware_dense_v1
+  exposure_policy: target_aware
+  semantic_pool_size: 200
+  semantic_fraction: 0.5
+  min_selected_per_round: 4
+  max_selected_per_round: 4
+  reference_per_round: 4
+  rounds: 5
+  filler_cap: 20

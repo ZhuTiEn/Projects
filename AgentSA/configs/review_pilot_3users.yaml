@@ -1,0 +1,39 @@
+# Isolated real-API contract/quality pilot: 3 fake users, 2 rounds, 2 fillers/round.
+extends: review_target_aware.yaml
+name: review_target_aware_pilot_3users
+attack:
+  fake_ratio: 0.000152  # floor(19,856 * ratio) = 3
+  filler_count: 4
+experiment:
+  output: runs/review_pilot_3users_rating_experiment
+agent:
+  output: runs/agent_review_pilot_3users_rating
+  rounds: 2
+  exposure_size: 12
+  min_selected_per_round: 2
+  max_selected_per_round: 2
+  reference_per_round: 2
+  filler_cap: 4
+reviews:
+  data_output: data/processed/review_full
+  agent_output: runs/agent_review_pilot_3users_text
+  experiment_output: runs/review_pilot_3users_experiment
+  validation_retries: 3
+  recent_reviews: 3
+  encoder: sentence_transformer
+  encoder_model: sentence-transformers/all-MiniLM-L6-v2
+  encoder_revision: null
+  encoder_local_only: false
+  hash_dimensions: 64
+  training:
+    epochs: 100
+    patience: 10
+    batch_size: 4096
+    learning_rate: 0.0003
+    l2: 0.0001
+    id_dimensions: 32
+    hidden_dimensions: 64
+    late_text_weight: 1.0
+llm:
+  max_requests: 200
+  max_total_tokens: 2000000

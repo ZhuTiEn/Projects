@@ -1,0 +1,10 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+  "python.testing.unittestEnabled": true,
+  "python.testing.pytestEnabled": false,
+  "python.testing.unittestArgs": ["-v", "-s", "tests"],
+  "files.encoding": "utf8",
+  "files.exclude": {"**/__pycache__": true, "**/*.egg-info": true},
+  "search.exclude": {".venv": true, "data": true, "runs": true, "*.gz": true},
+  "terminal.integrated.env.windows": {"PYTHONIOENCODING": "utf-8"}
+}

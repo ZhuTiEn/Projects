@@ -1,0 +1,10 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {"name": "1. 检查环境（无 API 调用）", "type": "debugpy", "request": "launch", "module": "agentsa", "cwd": "${workspaceFolder}", "console": "integratedTerminal", "args": ["doctor"], "justMyCode": true},
+    {"name": "2. 准备全量 Pets 数据", "type": "debugpy", "request": "launch", "module": "agentsa", "cwd": "${workspaceFolder}", "console": "integratedTerminal", "args": ["prepare"], "justMyCode": true},
+    {"name": "3. 运行小样本传统攻击", "type": "debugpy", "request": "launch", "module": "agentsa", "cwd": "${workspaceFolder}", "console": "integratedTerminal", "args": ["--config", "configs/smoke.yaml", "run"], "justMyCode": true},
+    {"name": "4. 调试模拟 Agent（无 API 调用）", "type": "debugpy", "request": "launch", "module": "agentsa", "cwd": "${workspaceFolder}", "console": "integratedTerminal", "args": ["--config", "configs/smoke.yaml", "generate-agent", "--mock"], "justMyCode": true},
+    {"name": "5. 训练全量干净模型", "type": "debugpy", "request": "launch", "module": "agentsa", "cwd": "${workspaceFolder}", "console": "integratedTerminal", "args": ["train-clean", "--seeds", "11"], "justMyCode": true}
+  ]
+}

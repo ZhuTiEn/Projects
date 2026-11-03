@@ -1,0 +1,410 @@
+AgentSA 第一阶段：本地测试指令清单
+适用环境：Windows / VS Code / PowerShell
+项目位置：C:\Projects\AgentSA
+整理日期：2026-10-30
+
+使用方法
+--------
+1. 在 VS Code 中打开项目，选择“终端 → 新建终端”，终端使用 PowerShell。
+2. 按需要分段复制下面 powershell 标记之间的命令，不复制标记本身。
+3. 本文件是说明清单，不是批处理脚本，不要一次执行全文。
+4. 每一步成功后再做下一步；出错时先处理错误。
+5. 标注“无 API 调用”的命令不使用 DeepSeek 额度；训练仍会占用本机计算资源。
+6. API Key 在自己的终端输入，不需要发送到聊天，也不要写进配置文件。
+7. 推荐顺序：A → B → C → D。E 为可选的较大规模实验。
+
+
+A. 环境和自动检查（无 API 调用）
+================================
+
+A1. 进入项目并设置中文终端输出
+
+```powershell
+Set-Location C:\Projects\AgentSA
+$env:PYTHONIOENCODING = 'utf-8'
+```
+
+效果：后面的相对路径都以项目根目录为准，减少中文输出乱码。
+
+A2. 检查环境
+
+```powershell
+.venv\Scripts\python.exe -m agentsa --config configs/deepseek.yaml doctor
+```
+
+效果：显示 Python、PyTorch、CUDA、数据文件、DeepSeek 配置、Key 是否存在。
+判断：raw_files 中两项应为 true；未设置 Key 时 credential_present=false 是正常现象。
+semantic_dependency_installed=false 表示还没安装语义检索依赖，不影响模拟测试或 api-check。
+此命令不会验证 Key 是否有效，也不会访问 DeepSeek。
+
+A3. 查看程序支持的命令
+
+```powershell
+.venv\Scripts\python.exe -m agentsa --help
+.venv\Scripts\python.exe -m agentsa run --help
+```
+
+效果：查看子命令和可选参数。注意 --config 放在子命令之前。
+
+A4. 运行自动测试
+
+```powershell
+.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
+
+效果：检查数据划分、模型训练、攻击预算、排序、Agent 恢复和 DeepSeek 请求格式等。
+判断：最后出现 OK；当前代码有 19 项测试。
+测试中的 HTTP 请求均使用替身，不连接真实 DeepSeek 服务。
+
+
+B. 小样本端到端测试（无 API 调用）
+==================================
+
+B1. 准备小样本数据
+
+```powershell
+.venv\Scripts\python.exe -m agentsa --config configs/smoke.yaml prepare
+```
+
+效果：从真实数据抽样并做小样本过滤；保存固定划分与目标列表。
+输出：data\processed\smoke\
+当前配置得到 94 用户、128 商品、327 条交互。
+注意：这份样本使用 2-core，仅用于检查代码，不是正式全量 5-core 实验。
+重复执行会核对已有数据后复用，不修改原始压缩包。
+
+B2. 生成模拟 Agent 的假评分
+
+```powershell
+.venv\Scripts\python.exe -m agentsa --config configs/smoke.yaml generate-agent --mock
+```
+
+效果：使用确定性模拟接口，检查画像、选品、评分、记忆和保存流程。
+输出：runs\smoke_agent_checked\mock\target_27\fake_ratings.csv
+目标 ID 来自 B1 保存的目标列表；当前配置为 27。
+注意：这不是 DeepSeek 生成的数据，不能用来证明真实 AgentSA 的效果。
+
+B3. 只测试 NMF 和两种传统攻击，快速查看训练流程
+
+```powershell
+.venv\Scripts\python.exe -m agentsa --config configs/smoke.yaml run --models nmf --methods random,average --seeds 11
+```
+
+效果：在小样本上训练干净 NMF、Random/Average 投毒 NMF，再比较指标。
+输出：runs\smoke_checked\experiments\results.csv
+说明：这里使用真实样本及传统攻击，没有模拟或真实 LLM 参与。
+仅运行 4 个 epochs 是管线测试配置，不能据此评价模型或攻击优劣。
+
+B4. 检查两种模型与全部攻击配置
+
+```powershell
+.venv\Scripts\python.exe -m agentsa --config configs/smoke.yaml run --include-agent --match-agent-budget --mock-agent
+```
+
+效果：两种模型各比较六种传统攻击、仅目标评分、模拟 Agent，共 16 个组合。
+--include-agent：加入已保存的 Agent 假评分，不会现场调用模型。
+--match-agent-budget：传统攻击沿用 Agent 的每用户 filler 数量。
+--mock-agent：读取模拟 Agent 数据，并把输出隔离在 mock_validation 目录。
+输出：runs\smoke_checked\mock_validation\results.csv 和 summary.json。
+重复执行会复用匹配的模型 checkpoint，并重新评测。
+
+B5. 在终端查看结果
+
+```powershell
+Import-Csv .\runs\smoke_checked\mock_validation\results.csv | Select-Object model,method,clean_hr,poison_hr,delta_hr,signed_prediction_shift,delta_rmse,fake_ratings | Format-Table -AutoSize
+```
+
+效果：显示模型、攻击方法、攻击前后命中率、评分变化、RMSE 变化与假评分条数。
+注意：HR 数值是比例，例如 0.10 表示 10%；模拟结果只用于检查程序。
+
+
+C. DeepSeek 连接测试（仅 C3 调用真实 API）
+=========================================
+
+C1. 在当前终端输入 API Key
+
+```powershell
+$secret = Read-Host '输入 DeepSeek API Key' -AsSecureString
+$env:DEEPSEEK_API_KEY = [System.Net.NetworkCredential]::new('', $secret).Password
+```
+
+效果：输入不显示明文，将 Key 设置为当前终端的环境变量。
+关闭终端后需重新设置；后续命令应在同一个终端执行。
+.env.example 不会自动加载。这里也不需要 setx 或修改系统环境变量。
+
+C2. 再检查配置（不调用 API）
+
+```powershell
+.venv\Scripts\python.exe -m agentsa --config configs/deepseek.yaml doctor
+```
+
+效果：credential_present 应变为 true，表示程序能读到 Key。
+这一步仍不能证明 Key 可用或账户有额度。
+
+C3. 检查真实接口（会产生 API 调用，可能计费）
+
+```powershell
+.venv\Scripts\python.exe -m agentsa --config configs/deepseek.yaml api-check
+```
+
+效果：发送一个简短 JSON 请求，判断 DeepSeek 是否正常返回。
+判断：输出包含 "ok": true。
+不读取数据、不加载语义编码器、不生成假用户、不训练推荐模型。
+输出：runs\agent_data_deepseek\api_checks\usage.json 及请求缓存。
+每次执行都会发送新请求，失败时可能按配置重试。
+
+C4. 查看接口检查累计用量（不调用 API）
+
+```powershell
+Get-Content .\runs\agent_data_deepseek\api_checks\usage.json
+```
+
+效果：查看 HTTP 尝试数、成功响应数及服务方返回的 token 数。
+这些数值不是人民币金额；实际费用以服务方账单为准。
+
+C5. 可选：切换模型
+
+```powershell
+$env:DEEPSEEK_MODEL = 'deepseek-v4-pro'
+```
+
+效果：后续请求使用该模型；环境变量优先于 YAML。
+此命令自身不发请求。模型名称须是账户当前可用的名称。
+若想恢复 YAML 配置的模型，在当前终端执行：
+
+```powershell
+Remove-Item Env:DEEPSEEK_MODEL -ErrorAction SilentlyContinue
+```
+
+注意：更换正式生成模型或思考模式时，应使用新的 agent.output 和 experiment.output。
+
+
+D. 少量真实 Agent 测试（生成步骤会调用 DeepSeek）
+================================================
+
+D1. 安装语义检索依赖（需要联网下载依赖，不调用 DeepSeek）
+
+```powershell
+.venv\Scripts\python.exe -m pip install -e ".[semantic]"
+```
+
+效果：安装固定版本 sentence-transformers 3.4.1 / transformers 4.48.3，供 Agent 做相关记忆检索，兼容现有 PyTorch 2.5.1。如果之前安装了 Transformers 5.x 并提示 PyTorch >= 2.6 或 nn 未定义，重新执行此命令可恢复项目要求的版本。
+第一次生成时还可能下载配置中的语义编码器权重。
+已有可用依赖时无须重复安装。
+
+D2. 准备或验证正式全量数据（无 API 调用）
+
+```powershell
+.venv\Scripts\python.exe -m agentsa --config configs/deepseek.yaml prepare
+```
+
+效果：保存或核对完整 Pet Supplies 的固定划分与目标列表。
+输出：data\processed\full\
+当前规模：19,856 用户、8,510 商品、157,836 条交互。
+原始压缩包保持不变。
+
+D3. 创建独立的小规模 DeepSeek 配置（只写配置，不发请求）
+
+```powershell
+@'
+extends: deepseek.yaml
+name: deepseek_pilot
+attack:
+  fake_ratio: 0.0002
+agent:
+  output: runs/agent_data_deepseek_pilot
+  rounds: 2
+  max_selected_per_round: 2
+  filler_cap: 4
+experiment:
+  output: runs/phase1_deepseek_pilot
+  seeds: [11]
+training:
+  epochs: 10
+  patience: 3
+llm:
+  max_requests: 100
+  max_total_tokens: 200000
+'@ | Set-Content -LiteralPath .\configs\deepseek_pilot.yaml -Encoding utf8
+```
+
+效果：创建 configs\deepseek_pilot.yaml，不修改原来的 deepseek.yaml。
+保留全量真实数据，但只生成 floor(19856 × 0.0002)=3 个假用户。
+每人最多 2 轮、合计最多 4 个 filler；最多 100 次 HTTP 尝试/目标。
+这是接口与实验管线试运行，不是论文默认的 5% 注入实验。
+注意：重复执行会覆盖这个 pilot 配置；若你已手动调整它，请不要重新执行本段。
+
+D4. 查看小规模调用估算（无 API 调用）
+
+```powershell
+.venv\Scripts\python.exe -m agentsa --config configs/deepseek_pilot.yaml estimate
+```
+
+效果：查看假用户数与估计请求数。
+当前 pilot 预计 3 人、约 26 次请求/目标，不含失败重试；实际选品为空时可能更少。
+输出中的 all_targets 估计是全部固定目标的量，不代表下一条命令会生成全部目标。
+
+D5. 生成少量真实 Agent 数据（会调用 DeepSeek，可能计费）
+
+```powershell
+.venv\Scripts\python.exe -m agentsa --config configs/deepseek_pilot.yaml generate-agent
+```
+
+效果：为第一个固定目标创建 3 个假用户，用真实 DeepSeek 生成画像和 filler 评分。
+该命令没有 --mock，因此是真实模型调用。
+输出：runs\agent_data_deepseek_pilot\real\target_1920\
+里面有 profiles.json、fake_ratings.csv、manifest.json、states 和 llm 目录。
+1920 是当前全量数据的第一个目标，实际以 targets.json 为准。
+本命令只生成攻击数据，不训练 NMF/NeuNMF。
+失败或到达限额时保留状态；处理错误后重新执行同一条命令续跑。
+
+D6. 查看生成数据及 token 记录（无 API 调用）
+
+```powershell
+Get-Content .\runs\agent_data_deepseek_pilot\real\target_1920\fake_ratings.csv -TotalCount 15
+Get-Content .\runs\agent_data_deepseek_pilot\real\target_1920\llm\usage.json
+```
+
+效果：检查假用户 ID、商品 ID、评分，以及本目标累计模型调用量。
+必须在 D5 成功后执行；若更换了目标，替换路径中的目标 ID。
+
+D7. 在真实全量数据上进行 pilot 比较（无 API 调用，但会训练模型）
+
+```powershell
+.venv\Scripts\python.exe -m agentsa --config configs/deepseek_pilot.yaml run --models nmf,neunmf --methods random,average,aop --seeds 11 --target-count 1 --include-agent --match-agent-budget
+```
+
+效果：两种模型分别训练干净版与 Random/Average/AoP/真实 Agent 投毒版。
+Agent 评分读取 D5 已生成的 CSV，不会在训练时再次调用 DeepSeek。
+输出：runs\phase1_deepseek_pilot\experiments\results.csv 和 summary.json。
+注意：虽然假用户少，但训练与排序仍使用全量真实数据，比 B 部分慢。
+10 个 epochs 和 3 个假用户只是试运行，不宜据此判断方法优劣。
+
+D8. 查看 pilot 结果
+
+```powershell
+Import-Csv .\runs\phase1_deepseek_pilot\experiments\results.csv | Select-Object model,method,clean_hr,poison_hr,delta_hr,signed_prediction_shift,delta_rmse,fake_ratings | Format-Table -AutoSize
+```
+
+效果：并排查看传统攻击与真实 DeepSeek Agent 的指标和评分数量。
+
+
+E. 可选：扩大实验（先完成前面的测试）
+====================================
+
+E1. 查看默认全量 Agent 调用规模（无 API 调用）
+
+```powershell
+.venv\Scripts\python.exe -m agentsa --config configs/deepseek.yaml estimate
+```
+
+效果：当前默认每目标 992 个假用户，约 13,951 次请求/目标，不含重试。
+默认每目标 HTTP 上限 10,000 次，因此全量生成可能在完成前停止。
+需要自行决定调用预算，再调整请求/token 上限；不要为了让程序跑完就无上限增加。
+
+E2. 全量数据上先跑一个传统攻击（无 API 调用）
+
+```powershell
+.venv\Scripts\python.exe -m agentsa --config configs/deepseek.yaml run --models nmf --methods random --seeds 11 --target-count 1
+```
+
+效果：只比较一个目标、一个种子的干净 NMF 与 Random 攻击。
+输出：runs\phase1_deepseek\experiments\
+该命令使用正式默认的训练轮数和 5% 假用户设置，计算量高于 pilot。
+
+E3. 为一个目标生成默认 5% 真实 Agent 数据（大量 API 调用，可能计费）
+
+```powershell
+.venv\Scripts\python.exe -m agentsa --config configs/deepseek.yaml generate-agent
+```
+
+效果：只生成第一个固定目标，按照默认规模创建假用户。
+请先检查 E1 估算，并确认你希望开始这一规模的真实生成。
+
+E4. 生成全部目标（大量 API 调用，可能计费）
+
+```powershell
+.venv\Scripts\python.exe -m agentsa --config configs/deepseek.yaml generate-agent --all-targets
+```
+
+效果：依次生成所有 10 个固定目标的独立攻击数据。
+不是本地初步测试所必需的步骤。
+
+E5. 对一个已生成目标做完整比较（无 API 调用，训练与排序量较大）
+
+```powershell
+.venv\Scripts\python.exe -m agentsa --config configs/deepseek.yaml run --target-count 1 --include-agent --match-agent-budget
+```
+
+效果：两种推荐模型、默认 3 个训练种子，比较六基线、仅目标评分和真实 Agent。
+必须先完成该目标的生成。
+
+
+F. 日常查看、恢复与常见问题
+==========================
+
+F1. 用 VS Code 打开项目
+
+```powershell
+code C:\Projects\AgentSA
+```
+
+效果：打开项目。解释器选 .venv\Scripts\python.exe。
+
+F2. 查看固定目标和数据清单
+
+```powershell
+Get-Content .\data\processed\full\targets.json
+Get-Content .\data\processed\full\manifest.json
+```
+
+效果：核对目标列表、划分数量、数据哈希与预处理设置。
+
+F3. 查看上一条程序是否成功
+
+```powershell
+$LASTEXITCODE
+```
+
+效果：外部程序正常退出通常是 0；非 0 表示错误，应先阅读报错。
+在你想检查的 Python 命令结束后立即执行。
+
+F4. 中断和恢复
+
+按 Ctrl+C 中断当前运行。
+Agent 生成：修复问题后执行原 generate-agent 命令，复用缓存与已保存的轮次状态。
+模型训练：已完成且配置匹配的模型可复用；尚未完成的单个模型会从头训练。
+如果是异常关闭留下 .generation.lock，先确认旧进程已经结束，再处理锁文件；不要并发写同一输出目录。
+
+F5. 常见报错
+
+- No module named ...：先确认使用 .venv\Scripts\python.exe；语义依赖缺失则执行 D1。
+- Set DEEPSEEK_API_KEY：在当前终端重新执行 C1。
+- HTTP 401/403：检查 Key、账户权限与服务地址；doctor=true 只代表变量存在。
+- HTTP 402：检查服务账户余额或额度；以服务方具体说明为准。
+- HTTP 429：可能遇到限流，程序有界重试；稍后在原配置下续跑。
+- Model output was truncated：输出被截断，可减少一次请求的内容或增加 max_tokens；改变配置后用新 Agent 输出目录。
+- Existing checkpoint uses different settings：模型/配置/代码变了，换新的 experiment.output，避免覆盖旧实验。
+- Agent settings/model changed：换新的 agent.output，不要混用不同模型生成的历史。
+- Budget limit reached：先看 usage.json，再决定是否增加限额；不需要重新生成已完成的数据。
+- 真实 Agent 报 lexical encoder is for --mock：误用了 smoke.yaml；真实调用使用 deepseek.yaml 或 deepseek_pilot.yaml。
+
+F6. 结果解释
+
+clean_hr / poison_hr：攻击前后目标进入 Top-10 的真实用户比例。
+delta_hr：poison_hr - clean_hr，正值表示目标曝光增加。
+signed_prediction_shift：目标预测评分的平均有符号变化。
+absolute_prediction_shift：目标评分变化的平均绝对值。
+delta_rmse / delta_mae：真实测试评分预测误差的变化。
+fake_ratings：该次注入评分总条数，用于核对预算。
+仅目标评分对照故意只有目标交互，不要求与其他方法 filler 数量一致。
+
+每次 run 的 results.csv 和 summary.json 汇总“本次命令”的范围，可能覆盖上次汇总。
+逐模型/目标/方法/种子的训练与指标文件仍分别保存在 poison 目录。
+想长期保留不同命令的汇总，请用不同 experiment.output，或另存结果 CSV。
+
+测试边界
+--------
+本清单中的 DeepSeek 接口名称和命令参数依据当前项目代码整理。
+生成器是评分阶段实现，不包含评论攻击与目标特征传播。
+模拟数据、小样本测试、低注入比例 pilot 均不等同于正式论文效果复现。
+本轮只创建指令文件，没有替你执行付费 API 命令或启动正式实验。

@@ -1,0 +1,18 @@
+# Full-scale rating-stage protocol with validation-selected training settings.
+extends: deepseek.yaml
+name: formal_original_5pct
+training:
+  learning_rate: 0.0003
+  epochs: 100
+  patience: 10
+experiment:
+  output: runs/formal_original_5pct
+  target_success_hr: 0.01
+agent:
+  output: runs/agent_formal_original_5pct
+  variant: rating_original
+  exposure_policy: popularity
+  min_selected_per_round: 0
+llm:
+  max_requests: 20000
+  max_total_tokens: 30000000
