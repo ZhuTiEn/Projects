@@ -121,6 +121,7 @@ class ReviewGenerationTests(unittest.TestCase):
                     self.assertEqual(row["review"], row["initial_review"])
             audit = audit_review_attack(config, dataset, target, mock=True)
             self.assertTrue(audit["passed"])
+            self.assertFalse(audit["propagation_exercised"])
             self.assertEqual(audit["strict_validation_failures"], [])
 
     def test_propagation_rejects_target_name_and_wrong_ids(self):

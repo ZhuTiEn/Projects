@@ -48,11 +48,13 @@ def audit_review_attack(config, dataset, target, mock=False):
         "plain_interactions": len(plain), "tfp_interactions": len(tfp),
         "filler_reviews": len(filler), "shared_feature_reviews": len(shared),
         "changed_reviews": len(changed), "strict_validation_failures": invalid,
+        "propagation_exercised": bool(shared and changed),
         "identical_rating_pairs": plain_pairs == tfp_pairs,
         "generation_validation_errors": manifest.get("validation_errors", 0),
         "rating_usage": rating_usage, "review_usage": review_usage,
     }
     output["passed"] = bool(profile_report["passed"] and not invalid and
                             plain_pairs == tfp_pairs and len(plain) == len(tfp) and
-                            manifest.get("review_protocol") == "strict_v2")
+                            manifest.get("review_protocol") == "strict_v2" and
+                            (mock or output["propagation_exercised"]))
     return output

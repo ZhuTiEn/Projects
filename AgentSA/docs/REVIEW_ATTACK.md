@@ -52,4 +52,4 @@ V2 生成完成后运行离线审计：
 .venv\Scripts\python.exe -m agentsa --config configs/review_pilot_3users_v2.yaml audit-reviews --target 1920
 ```
 
-只有输出中的 `passed` 为 `true`，且 `strict_validation_failures` 为空，才进入更大规模测试。
+只有输出中的 `passed` 与 `propagation_exercised` 均为 `true`，且 `strict_validation_failures` 为空，才进入更大规模真实测试。
