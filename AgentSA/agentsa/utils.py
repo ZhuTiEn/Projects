@@ -82,7 +82,7 @@ def validate_config(config):
                 raise ValueError(f"reviews.{key} is required.")
         if reviews["encoder"] not in {"hash", "sentence_transformer"}:
             raise ValueError("reviews.encoder must be hash or sentence_transformer.")
-        if reviews.get("protocol", "legacy") not in {"legacy", "strict_v2", "strict_v3"}:
+        if reviews.get("protocol", "legacy") not in {"legacy", "strict_v2", "strict_v3", "strict_v4"}:
             raise ValueError("Unknown reviews.protocol.")
         if type(reviews["validation_retries"]) is not int or reviews["validation_retries"] < 1:
             raise ValueError("reviews.validation_retries must be positive.")

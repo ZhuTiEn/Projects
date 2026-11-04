@@ -63,3 +63,13 @@ V2 的逐字证据规则会让模型在多次失败后返回空特征。`configs
 .venv\Scripts\python.exe -m agentsa --config configs/review_pilot_3users_v3.yaml generate-reviews --target 1920
 .venv\Scripts\python.exe -m agentsa --config configs/review_pilot_3users_v3.yaml audit-reviews --target 1920
 ```
+
+## V4 语义门控
+
+V3 仍可能因为双方证据共享 `gentle` 等泛化词而错误传播用途，例如把牙刷解释成梳毛用品。V4 使用独立目录 `runs/agent_review_pilot_3users_v4_text`，并增加确定性的本地语义门控：特征必须包含至少一个双方证据共同支持的功能或物理核心概念；品牌、物种以及 `gentle/soft/easy` 等性质不能单独构成特征；`toothbrush/dental/oral/teeth` 等同域词可以归并为口腔护理概念。审计会再次执行同一门控。
+
+```powershell
+.venv\Scripts\python.exe -m agentsa --config configs/review_pilot_3users_v4.yaml estimate-reviews
+.venv\Scripts\python.exe -m agentsa --config configs/review_pilot_3users_v4.yaml generate-reviews --target 1920
+.venv\Scripts\python.exe -m agentsa --config configs/review_pilot_3users_v4.yaml audit-reviews --target 1920
+```

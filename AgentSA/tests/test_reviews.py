@@ -13,6 +13,7 @@ from agentsa.review_audit import audit_review_attack
 from agentsa.review_experiment import run_review_experiments
 from agentsa.review_generation import (MockReviewClient, generate_review_attack,
                                         filter_shared_features, load_generated_reviews,
+                                        semantic_feature_rejection_reason,
                                         valid_propagated, valid_rewrites)
 from agentsa.review_models import ReviewTextEncoder, aggregate_features, build_review_model, means
 from agentsa.utils import load_config, read_json
@@ -149,6 +150,44 @@ class ReviewGenerationTests(unittest.TestCase):
                                     {1: filtered[0]["shared_features"]})
             self.assertEqual(result[0]["shared_features"][0]["feature"], "soft oral brush")
 
+    def test_v4_semantic_gate_rejects_generic_false_positive_and_accepts_oral_synonyms(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            event_path = Path(tmp) / "events.jsonl"
+            target = {"title": "CET Toothbrush for Cats", "category": "Cats Dental Care",
+                      "description": "Soft bristles assure a gentle, well-tolerated application."}
+            items = [
+                {"item_id": 1, "title": "Gentle Cat Grooming Glove", "category": "Cats Grooming",
+                 "description": "The most gentle way to groom and massage your cat."},
+                {"item_id": 2, "title": "Oral Hygiene Chews for Cats", "category": "Cats Dental Care",
+                 "description": "Helps keep cats teeth healthy and clean."},
+            ]
+            response = {"items": [
+                {"item_id": 1, "shared_features": [{
+                    "feature": "Gentle grooming suitable for cats",
+                    "target_evidence": "Soft bristles assure a gentle, well-tolerated application.",
+                    "filler_evidence": "The most gentle way to groom and massage your cat"}]},
+                {"item_id": 2, "shared_features": [{
+                    "feature": "Feline oral hygiene",
+                    "target_evidence": "CET Toothbrush for Cats",
+                    "filler_evidence": "Oral Hygiene Chews for Cats"}]},
+            ]}
+            filtered = filter_shared_features(response, [1, 2], target, items, event_path,
+                                              semantic_strict=True)
+            self.assertEqual(filtered[0]["shared_features"], [])
+            self.assertEqual(filtered[1]["shared_features"][0]["feature"], "Feline oral hygiene")
+            self.assertIn("absent from target evidence", event_path.read_text(encoding="utf-8"))
+            self.assertIsNone(semantic_feature_rejection_reason(
+                filtered[1]["shared_features"][0]))
+            self.assertIsNone(semantic_feature_rejection_reason({
+                "feature": "stainless steel bowl",
+                "target_evidence": "A durable stainless steel bowl for feeding",
+                "filler_evidence": "Includes one stainless steel bowl"}))
+            self.assertEqual(semantic_feature_rejection_reason({
+                "feature": "gentle and suitable for cats",
+                "target_evidence": "gentle for cats",
+                "filler_evidence": "suitable for cats"}),
+                "feature lacks a shared functional or physical core concept")
+
     def test_strict_v3_mock_pipeline_uses_separate_feature_stage(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -167,6 +206,24 @@ class ReviewGenerationTests(unittest.TestCase):
             self.assertEqual(manifest["feature_rejections"], 0)
             audit = audit_review_attack(config, dataset, target, mock=True)
             self.assertEqual(audit["feature_rejections"], 0)
+            self.assertTrue(audit["passed"])
+
+    def test_strict_v4_mock_pipeline_enforces_semantic_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            create_data(root)
+            config = review_config(root)
+            config["agent"].update(profile_diversity_mode="strict_v1",
+                                   profile_candidate_multiplier=2)
+            config["reviews"]["protocol"] = "strict_v4"
+            prepare(config)
+            dataset = load_dataset(config)
+            target = dataset["targets"][0]
+            generate_agent_attack(config, dataset, target, mock=True)
+            generate_review_attack(config, dataset, target, mock=True)
+            audit = audit_review_attack(config, dataset, target, mock=True)
+            self.assertEqual(audit["review_protocol"], "strict_v4")
+            self.assertTrue(audit["semantic_gate_enforced"])
             self.assertTrue(audit["passed"])
 
     def test_propagation_rejects_target_name_and_wrong_ids(self):

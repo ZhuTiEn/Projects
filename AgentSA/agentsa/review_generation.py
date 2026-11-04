@@ -58,9 +58,27 @@ V3_REVIEW_PROMPTS = {
                         "experiment, or a recommendation system."),
 }
 
+V4_REVIEW_PROMPTS = {
+    **V3_REVIEW_PROMPTS,
+    "extract_shared_features": ("For every supplied filler item, propose only concrete physical features or "
+                                "functional use cases genuinely supported by BOTH target and filler metadata. "
+                                "Every concept asserted by the feature label must be present or semantically "
+                                "equivalent in both evidence excerpts. Brand, animal species, or generic qualities "
+                                "such as gentle, soft, easy, or suitable are never sufficient by themselves. "
+                                "A toothbrush and a dental chew may share feline oral care when both excerpts "
+                                "support it; a gentle toothbrush and a gentle grooming glove do not share grooming. "
+                                "Every target_evidence and filler_evidence must be an exact verbatim excerpt from "
+                                "the corresponding supplied metadata. Return {items:[{item_id:integer,"
+                                "shared_features:[{feature:string,target_evidence:string,filler_evidence:string}]}]}. "
+                                "Include every supplied item exactly once and use an empty list when no supported "
+                                "overlap exists."),
+}
+
 
 def active_review_prompts(settings):
     protocol = settings.get("protocol", "legacy")
+    if protocol == "strict_v4":
+        return V4_REVIEW_PROMPTS
     if protocol == "strict_v3":
         return V3_REVIEW_PROMPTS
     return STRICT_REVIEW_PROMPTS if protocol == "strict_v2" else REVIEW_PROMPTS
@@ -196,13 +214,73 @@ def valid_propagated(value, allowed, target, items=None, strict=False):
 
 
 _FEATURE_STOPWORDS = {"a", "an", "and", "for", "of", "the", "to", "with", "product", "item"}
+_SEMANTIC_STOPWORDS = _FEATURE_STOPWORDS | {"care", "suitable", "designed", "use", "used", "using",
+                                            "provides", "provide", "application", "apply", "well",
+                                            "quality", "general", "routine"}
+
+_SEMANTIC_ALIASES = {
+    "animal_cat": {"cat", "cats", "feline", "kitten", "kittens"},
+    "animal_dog": {"dog", "dogs", "canine", "puppy", "puppies"},
+    "oral_care": {"dental", "oral", "hygiene", "tooth", "teeth", "toothbrush", "toothbrushes", "dentifrice",
+                  "periodontal", "plaque", "tartar", "gum", "gums"},
+    "brush_tool": {"brush", "brushes", "toothbrush", "toothbrushes", "fingerbrush", "fingerbrushes"},
+    "bristle": {"bristle", "bristles"},
+    "grooming": {"groom", "grooms", "groomed", "grooming", "slicker", "deshedding", "coat", "fur", "hair"},
+    "cleaning": {"clean", "cleans", "cleaned", "cleaning", "cleaner"},
+    "chewing": {"chew", "chews", "chewed", "chewing"},
+    "massage": {"massage", "massages", "massaging"},
+    "handle": {"handle", "handles", "grip", "grips"},
+    "shape": {"shape", "shaped", "tapered", "head"},
+    "softness": {"soft", "softer", "softest"},
+    "gentleness": {"gentle", "gently", "tender", "tolerated", "tolerable"},
+    "ease": {"easy", "easily", "simple", "simply"},
+}
+
+_CORE_SEMANTIC_CONCEPTS = {"oral_care", "brush_tool", "bristle", "grooming", "cleaning",
+                           "chewing", "massage", "handle", "shape"}
+_NONCORE_SEMANTIC_CONCEPTS = {"animal_cat", "animal_dog", "softness", "gentleness", "ease"}
+_BRAND_TOKENS = {"cet", "c", "e", "t"}
 
 
 def _feature_tokens(value):
     return {x for x in _normalized(value).split() if x not in _FEATURE_STOPWORDS}
 
 
-def filter_shared_features(value, allowed, target, items, event_path=None):
+def _semantic_units(value):
+    tokens = {x for x in _normalized(value).split() if x not in _SEMANTIC_STOPWORDS}
+    units = set()
+    covered = set()
+    for concept, aliases in _SEMANTIC_ALIASES.items():
+        matches = tokens & aliases
+        if matches:
+            units.add(concept)
+            covered.update(matches)
+    units.update(f"token:{token}" for token in tokens - covered - _BRAND_TOKENS)
+    return units
+
+
+def semantic_feature_rejection_reason(feature):
+    """Return a deterministic V4 rejection reason, or None for a supported shared concept."""
+    feature_units = _semantic_units(feature["feature"])
+    target_units = _semantic_units(feature["target_evidence"])
+    filler_units = _semantic_units(feature["filler_evidence"])
+    if not feature_units:
+        return "brand-only or empty feature"
+    core = ((feature_units & _CORE_SEMANTIC_CONCEPTS) |
+            {unit for unit in feature_units if unit.startswith("token:")})
+    core -= _NONCORE_SEMANTIC_CONCEPTS
+    if not core:
+        return "feature lacks a shared functional or physical core concept"
+    if feature_units - target_units:
+        return "feature asserts concepts absent from target evidence"
+    if feature_units - filler_units:
+        return "feature asserts concepts absent from filler evidence"
+    if not (core & target_units & filler_units):
+        return "no shared functional or physical core concept"
+    return None
+
+
+def filter_shared_features(value, allowed, target, items, event_path=None, semantic_strict=False):
     """Validate each proposed feature independently; bad features do not erase good ones."""
     rows = value["items"]
     if not isinstance(rows, list) or len(rows) != len(allowed):
@@ -234,13 +312,15 @@ def filter_shared_features(value, allowed, target, items, event_path=None):
                     reason = "target evidence is not an exact metadata excerpt"
                 elif len(filler_evidence) < 4 or filler_evidence not in filler_metadata:
                     reason = "filler evidence is not an exact metadata excerpt"
+                elif semantic_strict:
+                    reason = semantic_feature_rejection_reason(feature)
                 elif not (tokens & _feature_tokens(target_evidence)):
                     reason = "feature is not grounded in target evidence"
                 elif not (tokens & _feature_tokens(filler_evidence)):
                     reason = "feature is not grounded in filler evidence"
-                elif label in seen:
+                if reason is None and label in seen:
                     reason = "duplicate feature"
-                else:
+                elif reason is None:
                     seen.add(label)
                     accepted.append(feature)
             except (AttributeError, KeyError, TypeError, ValueError) as exc:
@@ -344,7 +424,7 @@ def _generate(config, dataset, target, mock, output, source, source_manifest,
     else:
         analysis = _request(client, "review_analyze", {"target": target_item},
                             lambda value: valid_analysis(value, target_item,
-                                settings.get("protocol", "legacy") in {"strict_v2", "strict_v3"}),
+                                settings.get("protocol", "legacy") in {"strict_v2", "strict_v3", "strict_v4"}),
                             settings["validation_retries"], prompts, event_path)
         write_json(analysis_path, analysis)
     by_user = {}
@@ -389,11 +469,13 @@ def _generate(config, dataset, target, mock, output, source, source_manifest,
             initial_by_item = {row["item_id"]: row["review"] for row in plain}
             propagation_items = [{**item, "initial_review": initial_by_item[item["item_id"]]}
                                  for item in supplied]
-            if settings.get("protocol", "legacy") == "strict_v3":
+            if settings.get("protocol", "legacy") in {"strict_v3", "strict_v4"}:
+                semantic_strict = settings.get("protocol") == "strict_v4"
                 feature_rows = _request(client, "extract_shared_features",
                     {"target": target_item, "target_analysis": analysis, "items": supplied},
-                    lambda value, selected=selected, supplied=supplied: filter_shared_features(
-                        value, selected, target_item, supplied, event_path),
+                    lambda value, selected=selected, supplied=supplied,
+                    semantic_strict=semantic_strict: filter_shared_features(
+                        value, selected, target_item, supplied, event_path, semantic_strict),
                     settings["validation_retries"], prompts, event_path)
                 features_by_item = {row["item_id"]: row["shared_features"] for row in feature_rows}
                 rewrite_items = [{**row, "initial_review": initial_by_item[row["item_id"]],

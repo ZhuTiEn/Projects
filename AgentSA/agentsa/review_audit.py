@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from .agents import agent_directory, profile_diversity_report, public_item
 from .review_generation import (load_generated_reviews, review_directory,
-                                valid_propagated)
+                                semantic_feature_rejection_reason, valid_propagated)
 from .utils import read_json
 
 
@@ -24,6 +24,7 @@ def audit_review_attack(config, dataset, target, mock=False):
     tfp_pairs = {(r["user_id"], r["item_id"], float(r["rating"])) for r in tfp}
     target_item = {**public_item(dataset["items"][target]),
                    "asin": dataset["items"][target].get("asin", "")}
+    protocol = manifest.get("review_protocol", "legacy")
     filler = [row for row in tfp if row.get("round", -1) >= 0]
     invalid = []
     for row in filler:
@@ -34,6 +35,11 @@ def audit_review_attack(config, dataset, target, mock=False):
             valid_propagated({"reviews": [{"item_id": row["item_id"],
                 "review": row["review"], "shared_features": row["shared_features"]}]},
                 [row["item_id"]], target_item, [supplied], strict=True)
+            if protocol == "strict_v4":
+                for feature in row["shared_features"]:
+                    reason = semantic_feature_rejection_reason(feature)
+                    if reason:
+                        raise ValueError(f"V4 semantic gate: {reason}")
         except (ValueError, KeyError, TypeError) as exc:
             invalid.append({"user_id": row["user_id"], "item_id": row["item_id"],
                             "error": str(exc)})
@@ -43,7 +49,7 @@ def audit_review_attack(config, dataset, target, mock=False):
     rating_usage = _usage(rating_dir / "llm" / "usage.json")
     review_usage = _usage(text_dir / "llm" / "usage.json")
     output = {
-        "target": target, "mock": mock, "review_protocol": manifest.get("review_protocol", "legacy"),
+        "target": target, "mock": mock, "review_protocol": protocol,
         "fake_users": len(profiles), "profile_diversity": profile_report,
         "plain_interactions": len(plain), "tfp_interactions": len(tfp),
         "filler_reviews": len(filler), "shared_feature_reviews": len(shared),
@@ -52,10 +58,11 @@ def audit_review_attack(config, dataset, target, mock=False):
         "identical_rating_pairs": plain_pairs == tfp_pairs,
         "generation_validation_errors": manifest.get("validation_errors", 0),
         "feature_rejections": manifest.get("feature_rejections", 0),
+        "semantic_gate_enforced": protocol == "strict_v4",
         "rating_usage": rating_usage, "review_usage": review_usage,
     }
     output["passed"] = bool(profile_report["passed"] and not invalid and
                             plain_pairs == tfp_pairs and len(plain) == len(tfp) and
-                            manifest.get("review_protocol") in {"strict_v2", "strict_v3"} and
+                            protocol in {"strict_v2", "strict_v3", "strict_v4"} and
                             (mock or output["propagation_exercised"]))
     return output

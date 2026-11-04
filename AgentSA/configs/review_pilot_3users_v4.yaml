@@ -1,0 +1,24 @@
+# Semantic-gated V4 review pilot. Reuses the accepted V2 rating trajectory.
+extends: review_pilot_3users_v3.yaml
+name: review_target_aware_pilot_3users_v4
+reviews:
+  data_output: data/processed/review_full
+  agent_output: runs/agent_review_pilot_3users_v4_text
+  experiment_output: runs/review_pilot_3users_v4_experiment
+  protocol: strict_v4
+  validation_retries: 5
+  recent_reviews: 3
+  encoder: sentence_transformer
+  encoder_model: sentence-transformers/all-MiniLM-L6-v2
+  encoder_revision: null
+  encoder_local_only: false
+  hash_dimensions: 64
+  training:
+    epochs: 100
+    patience: 10
+    batch_size: 4096
+    learning_rate: 0.0003
+    l2: 0.0001
+    id_dimensions: 32
+    hidden_dimensions: 64
+    late_text_weight: 1.0

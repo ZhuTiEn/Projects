@@ -110,20 +110,20 @@ def main(argv=None):
         users = dataset["manifest"]["users"]
         count = math.floor(users * config["attack"]["fake_ratio"])
         rounds = config["agent"]["rounds"]
-        strict_v3 = config.get("reviews", {}).get("protocol") == "strict_v3"
-        calls_per_round = 3 if strict_v3 else 2
+        two_stage = config.get("reviews", {}).get("protocol") in {"strict_v3", "strict_v4"}
+        calls_per_round = 3 if two_stage else 2
         minimum_per_target = 1 + count * (1 + 2 * rounds)
         maximum_per_target = 1 + count * (1 + calls_per_round * rounds)
         print(json.dumps({"real_users": users, "fake_users_per_target": count,
             "rounds": rounds, "target_analysis_calls": 1,
             "target_review_calls": count, "plain_review_batch_calls": count * rounds,
-            "feature_extraction_calls": count * rounds if strict_v3 else 0,
-            "rewrite_calls_maximum": count * rounds if strict_v3 else 0,
-            "propagation_batch_calls": 0 if strict_v3 else count * rounds,
+            "feature_extraction_calls": count * rounds if two_stage else 0,
+            "rewrite_calls_maximum": count * rounds if two_stage else 0,
+            "propagation_batch_calls": 0 if two_stage else count * rounds,
             "minimum_requests_per_target": minimum_per_target,
             "maximum_requests_per_target": maximum_per_target,
             "approx_requests_per_target": maximum_per_target,
-            "note": "No retries; strict_v3 rewrite calls occur only when approved features remain. The review stage has its own cache and usage ledger."}, indent=2))
+            "note": "No retries; two-stage rewrite calls occur only when approved features remain. The review stage has its own cache and usage ledger."}, indent=2))
         return
     if args.command == "generate-agent":
         if args.target is not None and args.all_targets:
